@@ -50,6 +50,8 @@ class EVRangePredictor {
     /**
      * Setup chart canvas
      */
+
+    /**
     setupChart() {
         const canvas = this.elements.lossChart;
         const ctx = canvas.getContext('2d');
@@ -60,7 +62,8 @@ class EVRangePredictor {
         
         this.chartContext = ctx;
     }
-
+    */
+    
     /**
      * Update step status in UI
      * @param {string} stepName - Step identifier
@@ -281,7 +284,7 @@ class EVRangePredictor {
                 throw new Error(`Test shape mismatch: features=${testX.shape[0]}, targets=${testY.shape[0]}`);
             }
 
-            const totalEpochs = 200;
+            const totalEpochs = 100;
             const batchSize = 16;
 
             // Train model with callbacks
