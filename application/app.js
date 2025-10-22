@@ -51,7 +51,6 @@ class EVRangePredictor {
      * Setup chart canvas
      */
 
-    /**
     setupChart() {
         const canvas = this.elements.lossChart;
         const ctx = canvas.getContext('2d');
@@ -62,7 +61,6 @@ class EVRangePredictor {
         
         this.chartContext = ctx;
     }
-    */
     
     /**
      * Update step status in UI
