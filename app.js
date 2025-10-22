@@ -21,6 +21,8 @@ class EVRangePredictor {
             form: document.getElementById('vehicleForm'),
             predictBtn: document.getElementById('predictBtn'),
             trainingStatus: document.getElementById('trainingStatus'),
+            buildingSteps: document.getElementById('buildingSteps'),
+            trainingProgress: document.getElementById('trainingProgress'),
             progressFill: document.getElementById('progressFill'),
             epochValue: document.getElementById('epochValue'),
             lossValue: document.getElementById('lossValue'),
@@ -60,33 +62,109 @@ class EVRangePredictor {
     }
 
     /**
+     * Update step status in UI
+     * @param {string} stepName - Step identifier
+     * @param {string} status - Status: 'pending', 'active', 'complete', 'failed'
+     * @param {string} details - Optional details message
+     */
+    updateStepStatus(stepName, status, details = '') {
+        const step = this.elements.buildingSteps.querySelector(`[data-step="${stepName}"]`);
+        if (!step) return;
+        
+        const icon = step.querySelector('.status-icon');
+        const text = step.querySelector('.status-text');
+        
+        // Update icon
+        icon.className = `status-icon ${status}`;
+        switch (status) {
+            case 'pending':
+                icon.textContent = '○';
+                break;
+            case 'active':
+                icon.textContent = '⟳';
+                break;
+            case 'complete':
+                icon.textContent = '✓';
+                break;
+            case 'failed':
+                icon.textContent = '✗';
+                break;
+        }
+        
+        // Update text if details provided
+        if (details) {
+            const originalText = text.textContent.split(' - ')[0];
+            text.textContent = `${originalText} - ${details}`;
+        }
+    }
+
+    /**
      * Initialize the application: load data and train model
      */
     async initialize() {
         try {
-            this.updateStatus('Loading training data...', 'loading');
+            // Step 1: Load data
+            this.updateStepStatus('load', 'active');
+            this.updateStatus('Loading training data from data.csv...', 'loading');
             
-            // Load and preprocess data
-            await this.dataLoader.loadCSV('data.csv');
-            const processedData = this.dataLoader.preprocessData();
+            try {
+                await this.dataLoader.loadCSV('data.csv');
+                this.updateStepStatus('load', 'complete', `${this.dataLoader.rawData.length} samples loaded`);
+            } catch (error) {
+                this.updateStepStatus('load', 'failed', error.message);
+                throw error;
+            }
             
-            this.updateStatus('Building neural network model...', 'loading');
+            // Step 2: Preprocess data
+            this.updateStepStatus('preprocess', 'active');
+            this.updateStatus('Preprocessing features and splitting dataset...', 'loading');
             
-            // Build model
-            this.buildModel(processedData.inputShape);
+            let processedData;
+            try {
+                processedData = this.dataLoader.preprocessData();
+                this.updateStepStatus('preprocess', 'complete', 
+                    `${processedData.inputShape} features, ${processedData.train.features.length} train samples`);
+            } catch (error) {
+                this.updateStepStatus('preprocess', 'failed', error.message);
+                throw error;
+            }
             
-            this.updateStatus('Training model...', 'loading');
+            // Step 3: Build model
+            this.updateStepStatus('build', 'active');
+            this.updateStatus('Building neural network architecture...', 'loading');
             
-            // Train model
-            await this.trainModel(processedData);
+            try {
+                await this.buildModel(processedData.inputShape);
+                const paramCount = this.model.countParams();
+                this.updateStepStatus('build', 'complete', `${paramCount} parameters`);
+            } catch (error) {
+                this.updateStepStatus('build', 'failed', error.message);
+                throw error;
+            }
             
-            this.updateStatus('Model ready! Enter vehicle specifications to predict range.', 'success');
+            // Step 4: Train model
+            this.updateStepStatus('train', 'active');
+            this.updateStatus('Training model on dataset...', 'loading');
+            this.elements.trainingProgress.style.display = 'block';
+            
+            try {
+                await this.trainModel(processedData);
+                this.updateStepStatus('train', 'complete', 'Training completed successfully');
+            } catch (error) {
+                this.updateStepStatus('train', 'failed', error.message);
+                throw error;
+            }
+            
+            // Success
+            this.updateStatus('✓ Model ready! Enter vehicle specifications to predict range.', 'success');
             this.isModelReady = true;
             this.elements.predictBtn.disabled = false;
             
         } catch (error) {
             console.error('Initialization error:', error);
-            this.updateStatus(`Error: ${error.message}`, 'error');
+            this.updateStatus(`✗ Initialization failed: ${error.message}`, 'error');
+            this.isModelReady = false;
+            this.elements.predictBtn.disabled = true;
         }
     }
 
@@ -94,8 +172,13 @@ class EVRangePredictor {
      * Build the neural network model
      * @param {number} inputShape - Number of input features
      */
-    buildModel(inputShape) {
+    async buildModel(inputShape) {
         try {
+            // Validate input shape
+            if (!inputShape || inputShape <= 0) {
+                throw new Error('Invalid input shape. Must be a positive integer.');
+            }
+            
             this.model = tf.sequential();
 
             // Input layer + First hidden layer (32 neurons)
@@ -144,9 +227,12 @@ class EVRangePredictor {
             console.log('Model built successfully');
             this.model.summary();
             
+            // Allow UI to update
+            await tf.nextFrame();
+            
         } catch (error) {
             console.error('Error building model:', error);
-            throw error;
+            throw new Error(`Model building failed: ${error.message}`);
         }
     }
 
@@ -162,12 +248,38 @@ class EVRangePredictor {
         this.isTraining = true;
         this.trainingHistory = { loss: [], valLoss: [], mae: [] };
 
+        let trainX, trainY, testX, testY;
+
         try {
+            // Validate data
+            if (!data.train.features || !data.train.targets || 
+                data.train.features.length === 0 || data.train.targets.length === 0) {
+                throw new Error('Invalid training  empty features or targets');
+            }
+            
+            if (!data.test.features || !data.test.targets || 
+                data.test.features.length === 0 || data.test.targets.length === 0) {
+                throw new Error('Invalid test  empty features or targets');
+            }
+
             // Convert data to tensors
-            const trainX = tf.tensor2d(data.train.features);
-            const trainY = tf.tensor2d(data.train.targets, [data.train.targets.length, 1]);
-            const testX = tf.tensor2d(data.test.features);
-            const testY = tf.tensor2d(data.test.targets, [data.test.targets.length, 1]);
+            try {
+                trainX = tf.tensor2d(data.train.features);
+                trainY = tf.tensor2d(data.train.targets, [data.train.targets.length, 1]);
+                testX = tf.tensor2d(data.test.features);
+                testY = tf.tensor2d(data.test.targets, [data.test.targets.length, 1]);
+            } catch (error) {
+                throw new Error(`Tensor conversion failed: ${error.message}`);
+            }
+
+            // Verify tensor shapes
+            if (trainX.shape[0] !== trainY.shape[0]) {
+                throw new Error(`Training shape mismatch: features=${trainX.shape[0]}, targets=${trainY.shape[0]}`);
+            }
+            
+            if (testX.shape[0] !== testY.shape[0]) {
+                throw new Error(`Test shape mismatch: features=${testX.shape[0]}, targets=${testY.shape[0]}`);
+            }
 
             const totalEpochs = 200;
             const batchSize = 16;
@@ -180,6 +292,12 @@ class EVRangePredictor {
                 shuffle: true,
                 callbacks: {
                     onEpochEnd: async (epoch, logs) => {
+                        // Validate logs
+                        if (!logs || logs.loss === undefined || logs.val_loss === undefined) {
+                            console.warn(`Invalid logs at epoch ${epoch}`);
+                            return;
+                        }
+
                         // Update training history
                         this.trainingHistory.loss.push(logs.loss);
                         this.trainingHistory.valLoss.push(logs.val_loss);
@@ -201,6 +319,9 @@ class EVRangePredictor {
 
                         // Allow UI to update
                         await tf.nextFrame();
+                    },
+                    onTrainEnd: async () => {
+                        console.log('Training completed');
                     }
                 }
             });
@@ -220,7 +341,14 @@ class EVRangePredictor {
         } catch (error) {
             console.error('Training error:', error);
             this.isTraining = false;
-            throw error;
+            
+            // Clean up tensors if they were created
+            if (trainX) tf.dispose(trainX);
+            if (trainY) tf.dispose(trainY);
+            if (testX) tf.dispose(testX);
+            if (testY) tf.dispose(testY);
+            
+            throw new Error(`Training failed: ${error.message}`);
         }
     }
 
@@ -394,7 +522,7 @@ class EVRangePredictor {
     /**
      * Update status message
      * @param {string} message - Status message
-     * @param {string} type - Status type: 'loading', 'success', 'error'
+     * @param {string} type - Status type: 'loading', 'success', 'error', 'info'
      */
     updateStatus(message, type) {
         this.elements.trainingStatus.textContent = message;
