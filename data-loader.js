@@ -20,10 +20,15 @@ export class DataLoader {
             }
             const csvText = await response.text();
             this.rawData = this.parseCSV(csvText);
+            
+            if (!this.rawData || this.rawData.length === 0) {
+                throw new Error('No data found in CSV file');
+            }
+            
             console.log(`Loaded ${this.rawData.length} samples from ${filePath}`);
         } catch (error) {
             console.error('Error loading CSV:', error);
-            throw error;
+            throw new Error(`CSV loading failed: ${error.message}`);
         }
     }
 
@@ -33,24 +38,32 @@ export class DataLoader {
      * @returns {Array<Object>}
      */
     parseCSV(csvText) {
-        const lines = csvText.trim().split('\n');
-        const headers = lines[0].split(',').map(h => h.trim());
-        
-        const data = [];
-        for (let i = 1; i < lines.length; i++) {
-            const values = lines[i].split(',').map(v => v.trim());
-            if (values.length !== headers.length) continue;
+        try {
+            const lines = csvText.trim().split('\n');
+            if (lines.length < 2) {
+                throw new Error('CSV file must contain header and at least one data row');
+            }
             
-            const row = {};
-            headers.forEach((header, index) => {
-                const value = values[index];
-                // Try to parse as number, otherwise keep as string
-                row[header] = isNaN(value) ? value : parseFloat(value);
-            });
-            data.push(row);
+            const headers = lines[0].split(',').map(h => h.trim());
+            
+            const data = [];
+            for (let i = 1; i < lines.length; i++) {
+                const values = lines[i].split(',').map(v => v.trim());
+                if (values.length !== headers.length) continue;
+                
+                const row = {};
+                headers.forEach((header, index) => {
+                    const value = values[index];
+                    // Try to parse as number, otherwise keep as string
+                    row[header] = isNaN(value) ? value : parseFloat(value);
+                });
+                data.push(row);
+            }
+            
+            return data;
+        } catch (error) {
+            throw new Error(`CSV parsing failed: ${error.message}`);
         }
-        
-        return data;
     }
 
     /**
@@ -62,99 +75,137 @@ export class DataLoader {
             throw new Error('No data loaded. Call loadCSV first.');
         }
 
-        // Define feature columns (excluding target and index)
-        const numericalFeatures = [
-            'top_speed_kmh', 'battery_capacity_kWh', 'torque_nm',
-            'acceleration_0_100_s', 'fast_charging_power_kw_dc', 'seats',
-            'length_mm', 'width_mm', 'height_mm'
-        ];
-        
-        const categoricalFeatures = [
-            'fast_charge_port', 'drivetrain'
-        ];
-        // Note: battery_type is excluded as it has only one value (no variance)
-        
-        const targetColumn = 'range_km';
-
-        // Extract features and target
-        const features = [];
-        const targets = [];
-        
-        this.rawData.forEach(row => {
-            if (row[targetColumn] === undefined || row[targetColumn] === null) {
-                return; // Skip rows with missing target
-            }
+        try {
+            // Define feature columns (excluding target and index)
+            const numericalFeatures = [
+                'top_speed_kmh', 'battery_capacity_kWh', 'torque_nm',
+                'acceleration_0_100_s', 'fast_charging_power_kw_dc', 'seats',
+                'length_mm', 'width_mm', 'height_mm'
+            ];
             
-            // Check if all required features exist
-            const hasAllFeatures = numericalFeatures.every(f => 
-                row[f] !== undefined && row[f] !== null
-            ) && categoricalFeatures.every(f => 
-                row[f] !== undefined && row[f] !== null
+            const categoricalFeatures = [
+                'fast_charge_port', 'drivetrain'
+            ];
+            // Note: battery_type is excluded as it has only one value (no variance)
+            
+            const targetColumn = 'range_km';
+
+            // Verify required columns exist
+            const sampleRow = this.rawData[0];
+            const missingColumns = [];
+            
+            [...numericalFeatures, ...categoricalFeatures, targetColumn].forEach(col => {
+                if (!(col in sampleRow)) {
+                    missingColumns.push(col);
+                }
+            });
+            
+            if (missingColumns.length > 0) {
+                throw new Error(`Missing required columns: ${missingColumns.join(', ')}`);
+            }
+
+            // Extract features and target
+            const features = [];
+            const targets = [];
+            
+            this.rawData.forEach(row => {
+                if (row[targetColumn] === undefined || row[targetColumn] === null) {
+                    return; // Skip rows with missing target
+                }
+                
+                // Check if all required features exist
+                const hasAllFeatures = numericalFeatures.every(f => 
+                    row[f] !== undefined && row[f] !== null && !isNaN(row[f])
+                ) && categoricalFeatures.every(f => 
+                    row[f] !== undefined && row[f] !== null
+                );
+                
+                if (hasAllFeatures) {
+                    features.push(row);
+                    targets.push(row[targetColumn]);
+                }
+            });
+
+            if (features.length === 0) {
+                throw new Error('No valid samples found after filtering missing values');
+            }
+
+            console.log(`Valid samples after filtering: ${features.length}`);
+
+            // Build categorical mappings (one-hot encoding preparation)
+            this.categoricalMappings = {};
+            categoricalFeatures.forEach(feature => {
+                const uniqueValues = [...new Set(features.map(f => f[feature]))].sort();
+                if (uniqueValues.length === 0) {
+                    throw new Error(`No unique values found for categorical feature: ${feature}`);
+                }
+                this.categoricalMappings[feature] = uniqueValues;
+            });
+
+            // Calculate statistics for normalization (mean and std)
+            this.featureStats = {};
+            numericalFeatures.forEach(feature => {
+                const values = features.map(f => f[feature]);
+                const mean = values.reduce((a, b) => a + b, 0) / values.length;
+                const variance = values.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / values.length;
+                const std = Math.sqrt(variance);
+                this.featureStats[feature] = { mean, std: std === 0 ? 1 : std }; // Avoid division by zero
+            });
+
+            // Transform features to normalized arrays with one-hot encoding
+            const transformedFeatures = features.map(row => 
+                this.transformFeatures(row, numericalFeatures, categoricalFeatures)
             );
+
+            // Verify all transformed features have the same shape
+            const inputShape = transformedFeatures[0].length;
+            const invalidShapes = transformedFeatures.filter(f => f.length !== inputShape);
+            if (invalidShapes.length > 0) {
+                throw new Error('Feature transformation resulted in inconsistent shapes');
+            }
+
+            // Perform 80/20 train/test split
+            const splitIndex = Math.floor(features.length * 0.8);
             
-            if (hasAllFeatures) {
-                features.push(row);
-                targets.push(row[targetColumn]);
+            if (splitIndex < 1 || features.length - splitIndex < 1) {
+                throw new Error('Dataset too small for train/test split. Need at least 5 samples.');
             }
-        });
+            
+            // Shuffle data before splitting
+            const shuffledIndices = this.shuffleIndices(features.length);
+            const trainIndices = shuffledIndices.slice(0, splitIndex);
+            const testIndices = shuffledIndices.slice(splitIndex);
 
-        console.log(`Valid samples after filtering: ${features.length}`);
+            const trainFeatures = trainIndices.map(i => transformedFeatures[i]);
+            const trainTargets = trainIndices.map(i => targets[i]);
+            const testFeatures = testIndices.map(i => transformedFeatures[i]);
+            const testTargets = testIndices.map(i => targets[i]);
 
-        // Build categorical mappings (one-hot encoding preparation)
-        this.categoricalMappings = {};
-        categoricalFeatures.forEach(feature => {
-            const uniqueValues = [...new Set(features.map(f => f[feature]))].sort();
-            this.categoricalMappings[feature] = uniqueValues;
-        });
+            this.processedData = {
+                train: {
+                    features: trainFeatures,
+                    targets: trainTargets
+                },
+                test: {
+                    features: testFeatures,
+                    targets: testTargets
+                },
+                inputShape: trainFeatures[0].length,
+                featureNames: {
+                    numerical: numericalFeatures,
+                    categorical: categoricalFeatures
+                }
+            };
 
-        // Calculate statistics for normalization (mean and std)
-        this.featureStats = {};
-        numericalFeatures.forEach(feature => {
-            const values = features.map(f => f[feature]);
-            const mean = values.reduce((a, b) => a + b, 0) / values.length;
-            const variance = values.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / values.length;
-            const std = Math.sqrt(variance);
-            this.featureStats[feature] = { mean, std: std === 0 ? 1 : std }; // Avoid division by zero
-        });
+            console.log(`Train samples: ${trainFeatures.length}, Test samples: ${testFeatures.length}`);
+            console.log(`Input feature dimension: ${this.processedData.inputShape}`);
 
-        // Transform features to normalized arrays with one-hot encoding
-        const transformedFeatures = features.map(row => 
-            this.transformFeatures(row, numericalFeatures, categoricalFeatures)
-        );
-
-        // Perform 80/20 train/test split
-        const splitIndex = Math.floor(features.length * 0.8);
-        
-        // Shuffle data before splitting
-        const shuffledIndices = this.shuffleIndices(features.length);
-        const trainIndices = shuffledIndices.slice(0, splitIndex);
-        const testIndices = shuffledIndices.slice(splitIndex);
-
-        const trainFeatures = trainIndices.map(i => transformedFeatures[i]);
-        const trainTargets = trainIndices.map(i => targets[i]);
-        const testFeatures = testIndices.map(i => transformedFeatures[i]);
-        const testTargets = testIndices.map(i => targets[i]);
-
-        this.processedData = {
-            train: {
-                features: trainFeatures,
-                targets: trainTargets
-            },
-            test: {
-                features: testFeatures,
-                targets: testTargets
-            },
-            inputShape: trainFeatures[0].length,
-            featureNames: {
-                numerical: numericalFeatures,
-                categorical: categoricalFeatures
-            }
-        };
-
-        console.log(`Train samples: ${trainFeatures.length}, Test samples: ${testFeatures.length}`);
-        console.log(`Input feature dimension: ${this.processedData.inputShape}`);
-
-        return this.processedData;
+            return this.processedData;
+            
+        } catch (error) {
+            console.error('Preprocessing error:', error);
+            throw new Error(`Data preprocessing failed: ${error.message}`);
+        }
     }
 
     /**
@@ -197,15 +248,19 @@ export class DataLoader {
             throw new Error('Model not trained. Cannot transform user input.');
         }
 
-        const numericalFeatures = [
-            'top_speed_kmh', 'battery_capacity_kWh', 'torque_nm',
-            'acceleration_0_100_s', 'fast_charging_power_kw_dc', 'seats',
-            'length_mm', 'width_mm', 'height_mm'
-        ];
-        
-        const categoricalFeatures = ['fast_charge_port', 'drivetrain'];
+        try {
+            const numericalFeatures = [
+                'top_speed_kmh', 'battery_capacity_kWh', 'torque_nm',
+                'acceleration_0_100_s', 'fast_charging_power_kw_dc', 'seats',
+                'length_mm', 'width_mm', 'height_mm'
+            ];
+            
+            const categoricalFeatures = ['fast_charge_port', 'drivetrain'];
 
-        return this.transformFeatures(userInput, numericalFeatures, categoricalFeatures);
+            return this.transformFeatures(userInput, numericalFeatures, categoricalFeatures);
+        } catch (error) {
+            throw new Error(`User input transformation failed: ${error.message}`);
+        }
     }
 
     /**
