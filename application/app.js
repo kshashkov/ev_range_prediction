@@ -7,8 +7,6 @@ class EVRangePredictor {
         this.dataLoader = new DataLoader();
         this.isTraining = false;
         this.isModelReady = false;
-        this.trainingHistory = { loss: [], valLoss: [], mae: [] };
-        this.chart = null;
         
         this.initializeUI();
     }
@@ -30,8 +28,7 @@ class EVRangePredictor {
             maeValue: document.getElementById('maeValue'),
             predictionResult: document.getElementById('predictionResult'),
             predictionPlaceholder: document.getElementById('predictionPlaceholder'),
-            rangeValue: document.getElementById('rangeValue'),
-            lossChart: document.getElementById('lossChart')
+            rangeValue: document.getElementById('rangeValue')
         };
 
         // Set up form submission
@@ -40,25 +37,8 @@ class EVRangePredictor {
             this.predict();
         });
 
-        // Set up canvas for chart
-        this.setupChart();
-
         // Start application
         this.initialize();
-    }
-
-    /**
-     * Setup chart canvas
-     */
-    setupChart() {
-        const canvas = this.elements.lossChart;
-        const ctx = canvas.getContext('2d');
-        const parent = canvas.parentElement;
-        
-        canvas.width = parent.clientWidth - 30;
-        canvas.height = 300;
-        
-        this.chartContext = ctx;
     }
 
     /**
@@ -246,7 +226,6 @@ class EVRangePredictor {
         }
 
         this.isTraining = true;
-        this.trainingHistory = { loss: [], valLoss: [], mae: [] };
 
         let trainX, trainY, testX, testY;
 
@@ -298,11 +277,6 @@ class EVRangePredictor {
                             return;
                         }
 
-                        // Update training history
-                        this.trainingHistory.loss.push(logs.loss);
-                        this.trainingHistory.valLoss.push(logs.val_loss);
-                        this.trainingHistory.mae.push(logs.mae);
-
                         // Update UI
                         const progress = ((epoch + 1) / totalEpochs) * 100;
                         this.elements.progressFill.style.width = `${progress}%`;
@@ -311,11 +285,6 @@ class EVRangePredictor {
                         this.elements.lossValue.textContent = logs.loss.toFixed(2);
                         this.elements.valLossValue.textContent = logs.val_loss.toFixed(2);
                         this.elements.maeValue.textContent = logs.mae.toFixed(2);
-
-                        // Update chart every 5 epochs or on last epoch
-                        if ((epoch + 1) % 5 === 0 || epoch === totalEpochs - 1) {
-                            this.updateChart();
-                        }
 
                         // Allow UI to update
                         await tf.nextFrame();
@@ -350,113 +319,6 @@ class EVRangePredictor {
             
             throw new Error(`Training failed: ${error.message}`);
         }
-    }
-
-    /**
-     * Update training chart
-     */
-    updateChart() {
-        const ctx = this.chartContext;
-        const canvas = this.elements.lossChart;
-        const width = canvas.width;
-        const height = canvas.height;
-        
-        // Clear canvas
-        ctx.clearRect(0, 0, width, height);
-        
-        if (this.trainingHistory.loss.length === 0) return;
-        
-        const padding = 40;
-        const chartWidth = width - 2 * padding;
-        const chartHeight = height - 2 * padding;
-        
-        // Find max value for scaling
-        const allValues = [...this.trainingHistory.loss, ...this.trainingHistory.valLoss];
-        const maxValue = Math.max(...allValues);
-        const minValue = Math.min(...allValues);
-        const range = maxValue - minValue || 1;
-        
-        // Draw axes
-        ctx.strokeStyle = '#dee2e6';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(padding, padding);
-        ctx.lineTo(padding, height - padding);
-        ctx.lineTo(width - padding, height - padding);
-        ctx.stroke();
-        
-        // Draw grid lines
-        ctx.strokeStyle = '#f1f3f5';
-        for (let i = 0; i <= 5; i++) {
-            const y = padding + (chartHeight * i) / 5;
-            ctx.beginPath();
-            ctx.moveTo(padding, y);
-            ctx.lineTo(width - padding, y);
-            ctx.stroke();
-        }
-        
-        // Draw training loss
-        this.drawLine(ctx, this.trainingHistory.loss, '#667eea', padding, chartWidth, chartHeight, minValue, range);
-        
-        // Draw validation loss
-        this.drawLine(ctx, this.trainingHistory.valLoss, '#764ba2', padding, chartWidth, chartHeight, minValue, range);
-        
-        // Draw legend
-        ctx.font = '12px sans-serif';
-        ctx.fillStyle = '#667eea';
-        ctx.fillRect(width - padding - 120, padding + 10, 15, 15);
-        ctx.fillStyle = '#495057';
-        ctx.fillText('Training Loss', width - padding - 100, padding + 22);
-        
-        ctx.fillStyle = '#764ba2';
-        ctx.fillRect(width - padding - 120, padding + 35, 15, 15);
-        ctx.fillStyle = '#495057';
-        ctx.fillText('Validation Loss', width - padding - 100, padding + 47);
-        
-        // Draw axis labels
-        ctx.fillStyle = '#495057';
-        ctx.font = '11px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText('Epoch', width / 2, height - 10);
-        
-        ctx.save();
-        ctx.translate(15, height / 2);
-        ctx.rotate(-Math.PI / 2);
-        ctx.fillText('Loss', 0, 0);
-        ctx.restore();
-        
-        // Draw value labels on y-axis
-        ctx.textAlign = 'right';
-        for (let i = 0; i <= 5; i++) {
-            const y = padding + (chartHeight * i) / 5;
-            const value = maxValue - (range * i) / 5;
-            ctx.fillText(value.toFixed(0), padding - 10, y + 4);
-        }
-    }
-
-    /**
-     * Draw a line on the chart
-     */
-    drawLine(ctx, data, color, padding, chartWidth, chartHeight, minValue, range) {
-        if (data.length < 2) return;
-        
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        
-        data.forEach((value, index) => {
-            const x = padding + (chartWidth * index) / (data.length - 1);
-            const normalizedValue = (value - minValue) / range;
-            const y = padding + chartHeight - (normalizedValue * chartHeight);
-            
-            if (index === 0) {
-                ctx.moveTo(x, y);
-            } else {
-                ctx.lineTo(x, y);
-            }
-        });
-        
-        ctx.stroke();
     }
 
     /**
