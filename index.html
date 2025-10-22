@@ -246,6 +246,23 @@
             border: 1px solid #f5c6cb;
         }
         
+        .status.info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        
+        .status-details {
+            margin-top: 10px;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.5);
+            border-radius: 5px;
+            font-size: 0.9em;
+            font-family: 'Courier New', monospace;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+        
         .canvas-container {
             position: relative;
             height: 300px;
@@ -254,6 +271,62 @@
         
         canvas {
             border-radius: 10px;
+        }
+        
+        .status-step {
+            display: flex;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+        }
+        
+        .status-step:last-child {
+            border-bottom: none;
+        }
+        
+        .status-icon {
+            width: 24px;
+            height: 24px;
+            margin-right: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+        }
+        
+        .status-icon.pending {
+            color: #6c757d;
+        }
+        
+        .status-icon.active {
+            color: #667eea;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+        
+        .status-icon.complete {
+            color: #28a745;
+        }
+        
+        .status-icon.failed {
+            color: #dc3545;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .status-text {
+            flex: 1;
+            font-size: 0.95em;
+        }
+        
+        #buildingSteps {
+            margin-top: 15px;
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
         }
         
         @media (max-width: 768px) {
@@ -277,8 +350,28 @@
         <div class="content">
             <div id="trainingSection" class="section">
                 <h2>🧠 Model Training</h2>
-                <div id="trainingStatus" class="status loading">Initializing model...</div>
-                <div id="trainingProgress">
+                <div id="trainingStatus" class="status loading">Initializing application...</div>
+                
+                <div id="buildingSteps">
+                    <div class="status-step" data-step="load">
+                        <div class="status-icon pending">○</div>
+                        <div class="status-text">Loading training data</div>
+                    </div>
+                    <div class="status-step" data-step="preprocess">
+                        <div class="status-icon pending">○</div>
+                        <div class="status-text">Preprocessing features</div>
+                    </div>
+                    <div class="status-step" data-step="build">
+                        <div class="status-icon pending">○</div>
+                        <div class="status-text">Building neural network</div>
+                    </div>
+                    <div class="status-step" data-step="train">
+                        <div class="status-icon pending">○</div>
+                        <div class="status-text">Training model</div>
+                    </div>
+                </div>
+                
+                <div id="trainingProgress" style="display: none;">
                     <div class="progress-bar">
                         <div id="progressFill" class="progress-fill">0%</div>
                     </div>
@@ -301,7 +394,7 @@
                         </div>
                     </div>
                     <div class="canvas-container">
-                        nvasvas id="lossChart"></canvas>
+                        <canvas id="lossChart"></canvas>
                     </div>
                 </div>
             </div>
